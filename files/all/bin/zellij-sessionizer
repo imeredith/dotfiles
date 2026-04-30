@@ -1,0 +1,371 @@
+#!/usr/bin/env bash
+CONFIG_FILE_NAME="zellij-sessionizer.conf"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zellij-sessionizer"
+CONFIG_FILE="$CONFIG_DIR/$CONFIG_FILE_NAME"
+PANE_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/zellij-sessionizer"
+PANE_CACHE_FILE="$PANE_CACHE_DIR/panes.cache"
+
+# config file example
+# ------------------------
+# # file: ~/.config/zellij-sessionizer/zellij-sessionizer.conf
+# # If set this overrides the default ZS_SEARCH_PATHS (~/ ~/personal ~/personal/dev/env/.config)
+# ZS_SEARCH_PATHS=(~/)
+# # If set this adds additional search paths to the default ZS_SEARCH_PATHS
+# # The number prefix is the depth for the path [OPTIONAL]
+# ZS_EXTRA_SEARCH_PATHS=(~/ghq:3 ~/Git:3 ~/.config:2)
+# # If set this overrides ZS_MAX_DEPTH (1)
+# ZS_MAX_DEPTH=2
+# # Commands available through -s/--session.
+# ZS_SESSION_COMMANDS=(<cmd1> <cmd2>)
+# # Logging: set to "echo" or "file"
+# ZS_LOG=echo
+# ZS_LOG_FILE=~/.local/share/zellij-sessionizer/zellij-sessionizer.log
+# ------------------------
+
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+fi
+
+if [[ -f "$CONFIG_FILE_NAME" ]]; then
+    source "$CONFIG_FILE_NAME"
+fi
+
+if [[ -n $ZS_LOG && -z $ZS_LOG_FILE ]]; then
+    ZS_LOG_FILE="$HOME/.local/share/zellij-sessionizer/zellij-sessionizer.log"
+fi
+
+if [[ -n $ZS_LOG_FILE ]]; then
+    mkdir -p "$(dirname "$ZS_LOG_FILE")"
+fi
+
+log() {
+    if [[ -z $ZS_LOG ]]; then
+        return
+    elif [[ $ZS_LOG == "echo" ]]; then
+        echo "$*"
+    elif [[ $ZS_LOG == "file" ]]; then
+        echo "$*" >> "$ZS_LOG_FILE"
+    fi
+}
+
+session_idx=""
+session_cmd=""
+user_selected=""
+split_type=""
+VERSION="0.1.0"
+
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+    -h | --help)
+        echo "Usage: zellij-sessionizer [OPTIONS] [SEARCH_PATH]"
+        echo "Options:"
+        echo "  -h, --help             Display this help message"
+        echo "  -s, --session <index>  Session command index"
+        echo "  --vsplit               Create a vertical split for the session command"
+        echo "  --hsplit               Create a horizontal split for the session command"
+        echo "  -v, --version          Display version information"
+        exit 0
+        ;;
+    -s | --session)
+        session_idx="$2"
+        if [[ -z $session_idx ]]; then
+            echo "Session index cannot be empty"
+            exit 1
+        fi
+
+        if [[ -z $ZS_SESSION_COMMANDS ]]; then
+            echo "ZS_SESSION_COMMANDS is not set. Must have a command set to run when switching to a session"
+            exit 1
+        fi
+
+        if [[ -z $session_idx || $session_idx -lt 0 || $session_idx -ge ${#ZS_SESSION_COMMANDS[@]} ]]; then
+            echo "Error: Invalid index. Please provide an index between 0 and $((${#ZS_SESSION_COMMANDS[@]} - 1))."
+            exit 1
+        fi
+
+        session_cmd="${ZS_SESSION_COMMANDS[$session_idx]}"
+        shift
+        ;;
+    --vsplit)
+        split_type="vsplit"
+        ;;
+    --hsplit)
+        split_type="hsplit"
+        ;;
+    -v | --version)
+        echo "zellij-sessionizer version $VERSION"
+        exit 0
+        ;;
+    *)
+        user_selected="$1"
+        ;;
+    esac
+    shift
+done
+
+log "zellij-sessionizer($VERSION): idx=$session_idx cmd=$session_cmd user_selected=$user_selected split_type=$split_type log=$ZS_LOG log_file=$ZS_LOG_FILE"
+
+if [[ -n $split_type && -z $session_idx ]]; then
+    echo "Error: --vsplit and --hsplit can only be used with -s/--session option"
+    exit 1
+fi
+
+sanity_check() {
+    if ! command -v zellij &>/dev/null; then
+        echo "zellij is not installed. Please install it first."
+        exit 1
+    fi
+
+    if ! command -v fzf &>/dev/null; then
+        echo "fzf is not installed. Please install it first."
+        exit 1
+    fi
+}
+
+is_inside_zellij() {
+    [[ -n $ZELLIJ ]]
+}
+
+switch_to() {
+    if ! is_inside_zellij; then
+        log "attaching to session $1"
+        zellij attach "$1"
+    else
+        log "switching to session $1"
+        zellij action switch-session "$1"
+    fi
+}
+
+has_session() {
+    zellij list-sessions --short 2>/dev/null | grep -Fxq "$1"
+}
+
+get_first_terminal_pane_id() {
+    local session_name="$1"
+    local pane_id=""
+    local attempt=""
+
+    for attempt in {1..20}; do
+        pane_id="$({
+            zellij --session "$session_name" action list-panes --json 2>/dev/null |
+                tr -d '\n ' |
+                sed 's/},{/}\
+{/g' |
+                grep '"is_plugin":false' |
+                sed -E 's/.*"id":([0-9]+).*/terminal_\1/' |
+                sed -n '1p'
+        })"
+        if [[ -n $pane_id ]]; then
+            echo "$pane_id"
+            return
+        fi
+        sleep 0.1
+    done
+}
+
+hydrate() {
+    local session_name="$1"
+    local session_dir="$2"
+    local init_file=""
+    local pane_id=""
+    local bootstrap_cmd=""
+
+    if [[ -n $session_cmd ]]; then
+        log "skipping hydrate for $session_name -- using \"$session_cmd\" instead"
+        return
+    elif [[ -f "$session_dir/.zellij-sessionizer" ]]; then
+        init_file="$session_dir/.zellij-sessionizer"
+        log "sourcing(local) $init_file"
+    elif [[ -f "$HOME/.zellij-sessionizer" ]]; then
+        init_file="$HOME/.zellij-sessionizer"
+        log "sourcing(global) $init_file"
+    fi
+
+    pane_id="$(get_first_terminal_pane_id "$session_name")"
+    if [[ -z $pane_id ]]; then
+        log "no terminal pane available to hydrate for $session_name"
+        return
+    fi
+
+    printf -v bootstrap_cmd 'cd %q' "$session_dir"
+    if [[ -n $init_file ]]; then
+        printf -v bootstrap_cmd '%s && source %q' "$bootstrap_cmd" "$init_file"
+    fi
+
+    zellij --session "$session_name" action paste --pane-id "$pane_id" "$bootstrap_cmd"
+    zellij --session "$session_name" action send-keys --pane-id "$pane_id" "Enter"
+}
+
+init_pane_cache() {
+    mkdir -p "$PANE_CACHE_DIR"
+    touch "$PANE_CACHE_FILE"
+}
+
+get_pane_id() {
+    local current_session="$1"
+    local current_session_idx="$2"
+    local current_split_type="$3"
+    init_pane_cache
+    grep "^${current_session}:${current_session_idx}:${current_split_type}:" "$PANE_CACHE_FILE" | cut -d: -f4
+}
+
+set_pane_id() {
+    local current_session="$1"
+    local current_session_idx="$2"
+    local current_split_type="$3"
+    local pane_id="$4"
+    init_pane_cache
+
+    grep -v "^${current_session}:${current_session_idx}:${current_split_type}:" "$PANE_CACHE_FILE" > "${PANE_CACHE_FILE}.tmp" 2>/dev/null || true
+    mv "${PANE_CACHE_FILE}.tmp" "$PANE_CACHE_FILE"
+    echo "${current_session}:${current_session_idx}:${current_split_type}:${pane_id}" >> "$PANE_CACHE_FILE"
+}
+
+pane_exists() {
+    zellij action list-panes 2>/dev/null | awk 'NR > 1 { print $1 }' | grep -Fxq "$1"
+}
+
+cleanup_dead_panes() {
+    local current_session="$1"
+    local temp_file="${PANE_CACHE_FILE}.tmp"
+    init_pane_cache
+    : > "$temp_file"
+
+    while IFS=: read -r cached_session idx split pane_id; do
+        [[ -z $cached_session ]] && continue
+        if [[ $cached_session != "$current_session" ]]; then
+            echo "${cached_session}:${idx}:${split}:${pane_id}" >> "$temp_file"
+        elif pane_exists "$pane_id"; then
+            echo "${cached_session}:${idx}:${split}:${pane_id}" >> "$temp_file"
+        fi
+    done < "$PANE_CACHE_FILE"
+
+    mv "$temp_file" "$PANE_CACHE_FILE"
+}
+
+# If ZS_SEARCH_PATHS is not set, use defaults.
+[[ -n $ZS_SEARCH_PATHS ]] || ZS_SEARCH_PATHS=(~/ ~/personal ~/personal/dev/env/.config)
+
+if [[ ${#ZS_EXTRA_SEARCH_PATHS[@]} -gt 0 ]]; then
+    ZS_SEARCH_PATHS+=("${ZS_EXTRA_SEARCH_PATHS[@]}")
+fi
+
+list_sessions() {
+    local current_session="${ZELLIJ_SESSION_NAME:-}"
+    local session_name=""
+
+    while IFS= read -r session_name; do
+        [[ -z $session_name ]] && continue
+        [[ -n $current_session && $session_name == "$current_session" ]] && continue
+        echo "[ZELLIJ] $session_name"
+    done < <(zellij list-sessions --short 2>/dev/null)
+}
+
+find_dirs() {
+    list_sessions
+
+    for entry in "${ZS_SEARCH_PATHS[@]}"; do
+        if [[ "$entry" =~ ^([^:]+):([0-9]+)$ ]]; then
+            path="${BASH_REMATCH[1]}"
+            depth="${BASH_REMATCH[2]}"
+        else
+            path="$entry"
+            depth="${ZS_MAX_DEPTH:-1}"
+        fi
+
+        [[ -d "$path" ]] && find "$path" -mindepth 1 -maxdepth "$depth" -path '*/.git' -prune -o -type d -print
+    done
+}
+
+handle_window_session_cmd() {
+    local tab_name="zellij-sessionizer-$((69 + session_idx))"
+
+    if zellij action query-tab-names 2>/dev/null | grep -Fxq "$tab_name"; then
+        log "switching to existing tab $tab_name"
+        zellij action go-to-tab-name "$tab_name"
+    else
+        log "creating tab $tab_name with command $session_cmd"
+        zellij action new-tab --name "$tab_name" -- "${SHELL:-/bin/sh}" -lc "$session_cmd" >/dev/null
+    fi
+}
+
+handle_split_session_cmd() {
+    local current_session="$1"
+    local direction="down"
+    local existing_pane_id=""
+    local new_pane_id=""
+
+    cleanup_dead_panes "$current_session"
+    existing_pane_id="$(get_pane_id "$current_session" "$session_idx" "$split_type")"
+
+    if [[ -n $existing_pane_id ]] && pane_exists "$existing_pane_id"; then
+        log "switching to existing pane $existing_pane_id"
+        zellij action focus-pane-id "$existing_pane_id"
+        return
+    fi
+
+    if [[ $split_type == "vsplit" ]]; then
+        direction="right"
+    fi
+
+    log "creating new pane direction=$direction command=$session_cmd"
+    new_pane_id="$(zellij action new-pane --direction "$direction" --name "session-$session_idx" -- "${SHELL:-/bin/sh}" -lc "$session_cmd")"
+
+    if [[ -n $new_pane_id ]]; then
+        set_pane_id "$current_session" "$session_idx" "$split_type" "$new_pane_id"
+        log "created pane $new_pane_id for session_idx=$session_idx split_type=$split_type"
+    fi
+}
+
+handle_session_cmd() {
+    local current_session="${ZELLIJ_SESSION_NAME:-}"
+
+    log "executing session command $session_cmd with index $session_idx split_type=$split_type"
+    if ! is_inside_zellij; then
+        echo "Error: zellij is not running. Please start zellij first before using session commands."
+        exit 1
+    fi
+
+    if [[ -n $split_type ]]; then
+        handle_split_session_cmd "$current_session"
+    else
+        handle_window_session_cmd
+    fi
+    exit 0
+}
+
+create_session() {
+    local session_name="$1"
+    local session_dir="$2"
+
+    log "creating background session $session_name cwd=$session_dir"
+    zellij attach --create-background "$session_name" >/dev/null
+    hydrate "$session_name" "$session_dir"
+}
+
+sanity_check
+
+if [[ -n $session_cmd ]]; then
+    handle_session_cmd
+elif [[ -n $user_selected ]]; then
+    selected="$user_selected"
+else
+    selected="$(find_dirs | fzf)"
+fi
+
+if [[ -z $selected ]]; then
+    exit 0
+fi
+
+if [[ "$selected" =~ ^\[ZELLIJ\]\ (.+)$ ]]; then
+    switch_to "${BASH_REMATCH[1]}"
+    exit 0
+fi
+
+selected_name="$(basename "$selected" | tr . _)"
+
+if ! has_session "$selected_name"; then
+    create_session "$selected_name" "$selected"
+fi
+
+switch_to "$selected_name"

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if command -v lazygit &>/dev/null; then
+  printf 'lazygit already installed\n'
+  exit 0
+fi
+
+printf 'Installing lazygit via Homebrew...\n'
+brew install lazygit
+
+printf 'lazygit installed\n'
