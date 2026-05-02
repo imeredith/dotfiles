@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 CONFIG_FILE_NAME="zellij-sessionizer.conf"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/zellij-sessionizer"
+CONFIG_DIR="$HOME/.config/zellij-sessionizer"
 CONFIG_FILE="$CONFIG_DIR/$CONFIG_FILE_NAME"
+HISTORY_FILE="$CONFIG_DIR/history"
 PANE_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/zellij-sessionizer"
 PANE_CACHE_FILE="$PANE_CACHE_DIR/panes.cache"
 
@@ -29,6 +30,9 @@ fi
 if [[ -f "$CONFIG_FILE_NAME" ]]; then
     source "$CONFIG_FILE_NAME"
 fi
+
+mkdir -p "$CONFIG_DIR"
+touch "$HISTORY_FILE"
 
 if [[ -n $ZS_LOG && -z $ZS_LOG_FILE ]]; then
     ZS_LOG_FILE="$HOME/.local/share/zellij-sessionizer/zellij-sessionizer.log"
@@ -126,7 +130,26 @@ is_inside_zellij() {
     [[ -n $ZELLIJ ]]
 }
 
+record_session_switch() {
+    local session_name="$1"
+    local temp_file=""
+
+    mkdir -p "$CONFIG_DIR"
+    temp_file="$HISTORY_FILE.tmp"
+
+    if [[ -f "$HISTORY_FILE" ]]; then
+        grep -Fxv "$session_name" "$HISTORY_FILE" > "$temp_file" 2>/dev/null || true
+    else
+        : > "$temp_file"
+    fi
+
+    echo "$session_name" >> "$temp_file"
+    mv "$temp_file" "$HISTORY_FILE"
+}
+
 switch_to() {
+    record_session_switch "$1"
+
     if ! is_inside_zellij; then
         log "attaching to session $1"
         zellij attach "$1"
@@ -252,18 +275,44 @@ fi
 
 list_sessions() {
     local current_session="${ZELLIJ_SESSION_NAME:-}"
-    local session_name=""
 
-    while IFS= read -r session_name; do
-        [[ -z $session_name ]] && continue
-        [[ -n $current_session && $session_name == "$current_session" ]] && continue
-        echo "[ZELLIJ] $session_name"
-    done < <(zellij list-sessions --short 2>/dev/null)
+    mkdir -p "$CONFIG_DIR"
+    touch "$HISTORY_FILE"
+
+    # Show sessions that are not in history first, then sessions from history in
+    # oldest-to-newest order. Because the picker displays later lines lower, the
+    # most recently switched-to session ends up at the bottom of the list.
+    awk -v current_session="$current_session" '
+        FNR == NR {
+            if ($0 != "" && $0 != current_session) {
+                active[$0] = 1
+                active_order[++active_count] = $0
+            }
+            next
+        }
+        active[$0] {
+            history_order[++history_count] = $0
+            last_seen[$0] = history_count
+        }
+        END {
+            for (i = 1; i <= active_count; i++) {
+                session_name = active_order[i]
+                if (!(session_name in last_seen)) {
+                    print "[ZELLIJ] " session_name
+                }
+            }
+
+            for (i = 1; i <= history_count; i++) {
+                session_name = history_order[i]
+                if (last_seen[session_name] == i) {
+                    print "[ZELLIJ] " session_name
+                }
+            }
+        }
+    ' <(zellij list-sessions --short 2>/dev/null) "$HISTORY_FILE" 2>/dev/null
 }
 
 find_dirs() {
-    list_sessions
-
     for entry in "${ZS_SEARCH_PATHS[@]}"; do
         if [[ "$entry" =~ ^([^:]+):([0-9]+)$ ]]; then
             path="${BASH_REMATCH[1]}"
@@ -275,6 +324,8 @@ find_dirs() {
 
         [[ -d "$path" ]] && find "$path" -mindepth 1 -maxdepth "$depth" -path '*/.git' -prune -o -type d -print
     done
+
+    list_sessions
 }
 
 handle_window_session_cmd() {
@@ -350,7 +401,13 @@ if [[ -n $session_cmd ]]; then
 elif [[ -n $user_selected ]]; then
     selected="$user_selected"
 else
-    selected="$(find_dirs | fzf)"
+    # Preserve input order and use a top-to-bottom fzf list so project
+    # directories stay above active zellij sessions visually. This also
+    # overrides FZF_DEFAULT_OPTS/default fzf layout that can otherwise place
+    # the trailing [ZELLIJ] section at the top of the picker. Wait for stdin
+    # to load, then jump to the last item so the picker opens scrolled to the
+    # bottom by default.
+    selected="$(find_dirs | fzf --no-sort --layout=reverse-list --sync --bind 'start:last,load:last')"
 fi
 
 if [[ -z $selected ]]; then

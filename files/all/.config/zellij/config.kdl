@@ -161,7 +161,8 @@ keybinds clear-defaults=true {
         bind "Alt f" { ToggleFloatingPanes; }
         bind "Ctrl f" {
             Run "/bin/sh" "-lc" "$HOME/bin/zellij-sessionizer" {
-                floating false
+                floating true
+                close_on_exit true
                 x "10%"
                 y "10%"
                 width "80%"

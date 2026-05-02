@@ -1,6 +1,7 @@
 export ZSH="$HOME/.oh-my-zsh"
+ZSH_THEME="robbyrussell"
 ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE="fg=8"
-plugins=(zsh-autosuggestions)
+plugins=(git zsh-autosuggestions)
 
 eval "$($HOME/.local/bin/mise activate zsh)"
 
@@ -24,3 +25,5 @@ source $HOME/.local/bin/env
 . "$HOME/.cargo/env"
 
 source "$ZSH/oh-my-zsh.sh"
+
+if command -v wt >/dev/null 2>&1; then eval "$(command wt config shell init zsh)"; fi
