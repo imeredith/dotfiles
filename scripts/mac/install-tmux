@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if ! command -v brew >/dev/null 2>&1; then
+  printf 'Homebrew is required to install tmux/fzf\n' >&2
+  exit 1
+fi
+
+if command -v tmux >/dev/null 2>&1; then
+  printf 'tmux already installed\n'
+else
+  printf 'Installing tmux via Homebrew...\n'
+  brew install tmux
+fi
+
+if command -v fzf >/dev/null 2>&1; then
+  printf 'fzf already installed\n'
+else
+  printf 'Installing fzf via Homebrew...\n'
+  brew install fzf
+fi

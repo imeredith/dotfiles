@@ -29,6 +29,7 @@ Symlinks everything from `files/` into `$HOME` (backing up existing files) and r
 | Tool | Description |
 |---|---|
 | **zsh** | `.zshrc` with Oh My Zsh, zsh-autosuggestions, mise, Homebrew, bun, cargo |
+| **tmux** | `.tmux.conf` with mouse, vim-style navigation, popups, and `tmux-sessionizer` |
 | **zellij** | Terminal multiplexer config + sessionizer scripts |
 | **nvim** | Alias `nvimc` to open config in a floating zellij pane |
 
@@ -40,3 +41,4 @@ Run individually or via `setup.sh`:
 |---|---|---|
 | `scripts/all/install-oh-my-zsh` | all | Installs Oh My Zsh and the zsh-autosuggestions plugin |
 | `scripts/mac/install-lazygit` | mac | Installs lazygit via Homebrew |
+| `scripts/mac/install-tmux` | mac | Installs tmux and fzf via Homebrew |

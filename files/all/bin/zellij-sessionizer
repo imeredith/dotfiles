@@ -56,6 +56,7 @@ session_idx=""
 session_cmd=""
 user_selected=""
 split_type=""
+list_only=""
 VERSION="0.1.0"
 
 while [[ "$#" -gt 0 ]]; do
@@ -65,6 +66,7 @@ while [[ "$#" -gt 0 ]]; do
         echo "Options:"
         echo "  -h, --help             Display this help message"
         echo "  -s, --session <index>  Session command index"
+        echo "  --list                 Print the picker list and exit"
         echo "  --vsplit               Create a vertical split for the session command"
         echo "  --hsplit               Create a horizontal split for the session command"
         echo "  -v, --version          Display version information"
@@ -89,6 +91,9 @@ while [[ "$#" -gt 0 ]]; do
 
         session_cmd="${ZS_SESSION_COMMANDS[$session_idx]}"
         shift
+        ;;
+    --list)
+        list_only="true"
         ;;
     --vsplit)
         split_type="vsplit"
@@ -393,6 +398,11 @@ create_session() {
     zellij attach --create-background "$session_name" >/dev/null
     hydrate "$session_name" "$session_dir"
 }
+
+if [[ -n $list_only ]]; then
+    find_dirs
+    exit 0
+fi
 
 sanity_check
 

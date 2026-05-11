@@ -1,0 +1,24 @@
+layout {
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        pane split_direction="vertical" {
+            pane size=32 name="Sessions" {
+                plugin location="file:/Users/ivan/personal/zellij-sessionizer/target/wasm32-wasip1/debug/zellij-session-sidebar.wasm" {
+                    search_paths "~/,~/personal,~/personal/dev/env/.config"
+                    max_depth "1"
+                    history_file "/data/history"
+                }
+            }
+            children
+        }
+        pane size=2 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    tab name="main" focus=true {
+        pane focus=true
+    }
+}

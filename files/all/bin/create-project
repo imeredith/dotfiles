@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: c <w|p> <folder-name>
+
+Creates a project folder if needed, runs git init for new folders, and
+switches to a tmux session started in that folder.
+
+Commands:
+  w, work       create under ~/work
+  p, personal   create under ~/personal
+
+Examples:
+  c w my-app    # ~/work/my-app
+  c p notes     # ~/personal/notes
+EOF
+}
+
+fail() {
+  printf 'c: %s\n' "$*" >&2
+  printf 'Run `c --help` for usage.\n' >&2
+  exit 1
+}
+
+sanitize_session_name() {
+  printf '%s' "$1" | LC_ALL=C tr -c '[:alnum:]_-' '_'
+}
+
+switch_tmux_session() {
+  local project_dir=$1
+  local session_name=$2
+  local target="=$session_name"
+
+  command -v tmux >/dev/null 2>&1 || fail "tmux is required"
+
+  if [[ -n "${TMUX:-}" ]]; then
+    if ! tmux has-session -t "$target" 2>/dev/null; then
+      tmux new-session -d -s "$session_name" -c "$project_dir"
+    fi
+
+    tmux switch-client -t "$target"
+    return
+  fi
+
+  if tmux has-session -t "$target" 2>/dev/null; then
+    exec tmux attach-session -t "$target"
+  fi
+
+  exec tmux new-session -s "$session_name" -c "$project_dir"
+}
+
+main() {
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+  fi
+
+  [[ $# -ge 2 ]] || fail "expected a location (w/p) and folder name"
+
+  local location=$1
+  shift
+
+  local base
+  local scope
+  case "$location" in
+    w|work)
+      base="$HOME/work"
+      scope="work"
+      ;;
+    p|personal)
+      base="$HOME/personal"
+      scope="personal"
+      ;;
+    *)
+      fail "unknown location '$location' (use 'w' or 'p')"
+      ;;
+  esac
+
+  local folder_name="$*"
+  [[ -n "$folder_name" ]] || fail "folder name cannot be empty"
+
+  case "$folder_name" in
+    .|/*|..|../*|*/..|*/../*)
+      fail "folder name must be relative and stay under $base"
+      ;;
+  esac
+
+  local project_dir="$base/$folder_name"
+
+  if [[ -e "$project_dir" && ! -d "$project_dir" ]]; then
+    fail "path exists but is not a directory: $project_dir"
+  fi
+
+  if [[ ! -d "$project_dir" ]]; then
+    mkdir -p "$project_dir"
+
+    command -v git >/dev/null 2>&1 || fail "git is required"
+    git -C "$project_dir" init
+  fi
+
+  local session_name
+  session_name=$(sanitize_session_name "$scope-$folder_name")
+  [[ -n "$session_name" ]] || fail "could not derive a tmux session name"
+
+  switch_tmux_session "$project_dir" "$session_name"
+}
+
+main "$@"

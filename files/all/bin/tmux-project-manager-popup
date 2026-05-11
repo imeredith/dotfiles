@@ -1,0 +1,65 @@
+#!/usr/bin/env zsh
+
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/tmux-project-manager"
+LOG_FILE="$LOG_DIR/popup.log"
+mkdir -p "$LOG_DIR"
+
+{
+  print ""
+  print "===== $(date '+%Y-%m-%d %H:%M:%S') tmux-project-manager popup ====="
+  print "SHELL=$SHELL"
+  print "PWD=$PWD"
+  print "TMUX=${TMUX:-}"
+  print "TERM=${TERM:-}"
+  print "PATH=$PATH"
+  print "tty=$(tty 2>&1)"
+} >> "$LOG_FILE" 2>&1
+
+pause_with_log() {
+  local status="$1"
+  print ""
+  print "tmux-project-manager exited with status $status"
+  print "Log: $LOG_FILE"
+  print ""
+  tail -n 80 "$LOG_FILE"
+  print ""
+  print "Press enter to close..."
+  read -r _
+  exit "$status"
+}
+
+fail() {
+  local status="$1"
+  shift
+  print -- "$*" | tee -a "$LOG_FILE" >&2
+  pause_with_log "$status"
+}
+
+GOBIN="$(go env GOBIN 2>> "$LOG_FILE")"
+if [[ -z "$GOBIN" ]]; then
+  GOPATH="$(go env GOPATH 2>> "$LOG_FILE")"
+  GOBIN="$GOPATH/bin"
+fi
+
+BIN="$GOBIN/tmux-project-manager"
+
+{
+  print "go=$(command -v go || true)"
+  go version 2>&1 || true
+  print "GOBIN=$GOBIN"
+  print "BIN=$BIN"
+} >> "$LOG_FILE" 2>&1
+
+[[ -x "$BIN" ]] || fail 1 "tmux-project-manager binary not found/executable: $BIN"
+
+export TMUX_PROJECT_MANAGER_LOG="$LOG_DIR/app.log"
+print "starting binary=$BIN app_log=$TMUX_PROJECT_MANAGER_LOG" >> "$LOG_FILE"
+"$BIN" 2>> "$LOG_FILE"
+status=$?
+print "exit=$status" >> "$LOG_FILE"
+
+if (( status != 0 )); then
+  pause_with_log "$status"
+fi
+
+exit 0
